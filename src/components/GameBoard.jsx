@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { createEmptyBoard, cloneBoard, clearLines } from "../game/board";
-import { createBagRNG, createPieceByType } from "../game/pieces";
-import { formatCells, tryRotatePieceSRS } from "../game/rotation";
+import { createEmptyBoard } from "../game/board";
+import { createGame, getGhostPiece, NEXT_PREVIEW_COUNT } from "../game/engine";
+import { createPieceByType } from "../game/pieces";
+import { formatCells } from "../game/rotation";
 import { calculatePPS, formatDuration } from "../game/sprint";
 import {
   COLS,
@@ -32,45 +33,6 @@ function cellsWithCurrentPiece(board, piece) {
   return view;
 }
 
-function collides(board, piece, dx, dy) {
-  const { shape, x, y } = piece;
-  for (let py = 0; py < shape.length; py++) {
-    for (let px = 0; px < shape[py].length; px++) {
-      if (!shape[py][px]) continue;
-      const nx = x + px + dx;
-      const ny = y + py + dy;
-
-      if (nx < 0 || nx >= COLS || ny >= ROWS) return true;
-      if (ny >= 0 && board[ny][nx] !== 0) return true;
-    }
-  }
-  return false;
-}
-
-function mergePiece(board, piece) {
-  const next = cloneBoard(board);
-  const { shape, x, y, id } = piece;
-  for (let py = 0; py < shape.length; py++) {
-    for (let px = 0; px < shape[py].length; px++) {
-      if (!shape[py][px]) continue;
-      const gx = x + px;
-      const gy = y + py;
-      if (gy >= 0 && gy < ROWS && gx >= 0 && gx < COLS) {
-        next[gy][gx] = id;
-      }
-    }
-  }
-  return next;
-}
-
-function getGhostPiece(board, piece) {
-  let drop = 0;
-  while (!collides(board, piece, 0, drop + 1)) {
-    drop += 1;
-  }
-  return { ...piece, y: piece.y + drop };
-}
-
 function getPieceCellSet(piece) {
   const cells = new Set();
   const { shape, x, y } = piece;
@@ -86,19 +48,6 @@ function getPieceCellSet(piece) {
   }
 
   return cells;
-}
-
-function hasPieceCellsAboveTop(piece) {
-  const { shape, y } = piece;
-
-  for (let py = 0; py < shape.length; py++) {
-    for (let px = 0; px < shape[py].length; px++) {
-      if (!shape[py][px]) continue;
-      if (y + py < 0) return true;
-    }
-  }
-
-  return false;
 }
 
 function hexToRgba(hex, alpha) {
@@ -121,12 +70,29 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+function levelForLines(lines) {
+  return Math.floor(lines / LINES_PER_LEVEL);
+}
+
+// What the board shows before the first game is created.
+function createIdleSnapshot() {
+  return {
+    board: createEmptyBoard(),
+    piece: null,
+    holdType: null,
+    canHold: true,
+    next: [],
+    piecesPlaced: 0,
+    lines: 0,
+    toppedOut: false,
+  };
+}
+
 // TETR.IO default lock delay is 30 frames at 60 Hz (~500 ms).
 const LOCK_DELAY_MS = 500;
 const COUNTDOWN_STEPS = ["3", "2", "1", "GO"];
 const COUNTDOWN_STEP_MS = 450;
 const COUNTDOWN_GO_DELAY_MS = 120;
-const NEXT_PREVIEW_COUNT = 5;
 const PREVIEW_BOX = 4;
 const PREVIEW_CELL = 12;
 
@@ -161,10 +127,20 @@ const CODE_TO_CONTROLS = Object.entries(CONTROL_KEY_CODES).reduce(
 
 const REPEATABLE_CONTROLS = ["left", "right"];
 
-const ONE_SHOT_CONTROLS = ["hardDrop"];
+// Presses are queued on keydown and replayed in press order on the next frame,
+// so taps shorter than a frame are never lost and hold-then-drop stays in order.
+const QUEUED_CONTROLS = [
+  "left",
+  "right",
+  "hardDrop",
+  "hold",
+  "rotateCW",
+  "rotateCCW",
+  "rotate180",
+];
 
 const REPEATABLE_CONTROL_SET = new Set(REPEATABLE_CONTROLS);
-const ONE_SHOT_CONTROL_SET = new Set(ONE_SHOT_CONTROLS);
+const QUEUED_CONTROL_SET = new Set(QUEUED_CONTROLS);
 
 function createInitialKeyState() {
   return {
@@ -183,14 +159,8 @@ function createInitialKeyState() {
 
 function createInitialRepeatTiming() {
   return {
-    left: { pendingInitial: false, nextRepeatAt: 0, pressedAt: 0 },
-    right: { pendingInitial: false, nextRepeatAt: 0, pressedAt: 0 },
-  };
-}
-
-function createInitialQueuedActions() {
-  return {
-    hardDrop: false,
+    left: { nextRepeatAt: 0, pressedAt: 0 },
+    right: { nextRepeatAt: 0, pressedAt: 0 },
   };
 }
 
@@ -268,35 +238,27 @@ export default function GameBoard({
 }) {
   const [gamePhase, setGamePhase] = useState("idle");
   const [countdownLabel, setCountdownLabel] = useState(null);
-  const [board, setBoard] = useState(() => createEmptyBoard());
-  const debugRotation = useRef(
-    typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).has("debugRotation"),
+  const urlParams = useRef(
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search)
+      : new URLSearchParams(),
   ).current;
+  const debugRotation = urlParams.has("debugRotation");
+  // ?seed=<text> makes the piece sequence reproducible for debugging.
+  const bagSeed = urlParams.get("seed") ?? undefined;
 
-  const bagRef = useRef(null);
-  const [piece, setPiece] = useState(null);
-  const [holdType, setHoldType] = useState(null);
-  const [nextQueue, setNextQueue] = useState([]);
-  const [canHold, setCanHold] = useState(true);
+  // The engine is the single source of truth for game state. `game` is only a
+  // render snapshot of it; never read gameplay decisions from React state.
+  const engineRef = useRef(null);
+  const [game, setGame] = useState(createIdleSnapshot);
 
   const [elapsedTimeMs, setElapsedTimeMs] = useState(0);
   const [runSummary, setRunSummary] = useState(null);
   const [useInfiniteSoftDrop, setUseInfiniteSoftDrop] = useState(false);
-
   const [score, setScore] = useState(0);
-  const [lines, setLines] = useState(0);
-  const [level, setLevel] = useState(0);
-  const [piecesPlaced, setPiecesPlaced] = useState(0);
 
   const rootRef = useRef(null);
-  const boardRef = useRef(board);
-  const pieceRef = useRef(piece);
-  const holdTypeRef = useRef(holdType);
-  const canHoldRef = useRef(canHold);
-  const levelRef = useRef(level);
-  const linesRef = useRef(lines);
-  const piecesPlacedRef = useRef(0);
+  const runOverRef = useRef(false);
   const gravityAccumulatorRef = useRef(0);
   const lastFrameTimeRef = useRef(null);
   const frameIdRef = useRef(null);
@@ -304,38 +266,16 @@ export default function GameBoard({
   const countdownTimersRef = useRef([]);
   const countdownRunIdRef = useRef(0);
   const elapsedTimeRef = useRef(0);
-  const previewQueueRef = useRef([]);
   const pressedKeysRef = useRef(new Set());
   const keyStateRef = useRef(createInitialKeyState());
-  const prevKeyStateRef = useRef(createInitialKeyState());
   const repeatTimingRef = useRef(createInitialRepeatTiming());
-  const queuedActionsRef = useRef(createInitialQueuedActions());
-
-  useEffect(() => {
-    boardRef.current = board;
-  }, [board]);
-
-  useEffect(() => {
-    pieceRef.current = piece;
-  }, [piece]);
-
-  useEffect(() => {
-    holdTypeRef.current = holdType;
-  }, [holdType]);
-
-  useEffect(() => {
-    canHoldRef.current = canHold;
-  }, [canHold]);
-
-  useEffect(() => {
-    levelRef.current = level;
-  }, [level]);
-
-  useEffect(() => {
-    linesRef.current = lines;
-  }, [lines]);
+  const actionQueueRef = useRef([]);
 
   const isSprintMode = gameMode === "sprint";
+
+  const syncGame = useCallback(() => {
+    setGame(engineRef.current.getState());
+  }, []);
 
   const clearLockTimer = useCallback(() => {
     if (lockTimerRef.current === null) return;
@@ -351,75 +291,26 @@ export default function GameBoard({
     countdownTimersRef.current = [];
   }, []);
 
-  const syncNextQueueState = useCallback(() => {
-    setNextQueue(previewQueueRef.current.map((p) => p.type));
-  }, []);
-
-  const fillPreviewQueue = useCallback(() => {
-    if (!bagRef.current) return;
-
-    while (previewQueueRef.current.length < NEXT_PREVIEW_COUNT) {
-      const drawn = bagRef.current.next();
-      if (!drawn) break;
-      previewQueueRef.current.push(drawn);
-    }
-  }, []);
-
-  const popNextPiece = useCallback(() => {
-    if (!bagRef.current) return null;
-
-    fillPreviewQueue();
-    const next = previewQueueRef.current.shift() ?? null;
-    fillPreviewQueue();
-    syncNextQueueState();
-    return next;
-  }, [fillPreviewQueue, syncNextQueueState]);
-
   const startNewGame = useCallback(() => {
     clearLockTimer();
 
-    const rng = createBagRNG();
-    bagRef.current = rng;
-
-    const firstPiece = rng.next();
-    const emptyBoard = createEmptyBoard();
-    previewQueueRef.current = [];
-    fillPreviewQueue();
-
-    boardRef.current = emptyBoard;
-    pieceRef.current = firstPiece;
-    holdTypeRef.current = null;
-    canHoldRef.current = true;
-    levelRef.current = 0;
-    linesRef.current = 0;
-    piecesPlacedRef.current = 0;
+    engineRef.current = createGame({ seed: bagSeed });
+    runOverRef.current = false;
     gravityAccumulatorRef.current = 0;
     lastFrameTimeRef.current = null;
     elapsedTimeRef.current = 0;
 
-    setBoard(emptyBoard);
-    setPiece(firstPiece);
-    setHoldType(null);
-    setCanHold(true);
-    syncNextQueueState();
+    syncGame();
     setElapsedTimeMs(0);
     setRunSummary(null);
     setScore(0);
-    setLines(0);
-    setLevel(0);
-    setPiecesPlaced(0);
-  }, [
-    clearLockTimer,
-    fillPreviewQueue,
-    syncNextQueueState,
-  ]);
+  }, [bagSeed, clearLockTimer, syncGame]);
 
   const clearInputState = useCallback(() => {
     pressedKeysRef.current.clear();
     keyStateRef.current = createInitialKeyState();
-    prevKeyStateRef.current = createInitialKeyState();
     repeatTimingRef.current = createInitialRepeatTiming();
-    queuedActionsRef.current = createInitialQueuedActions();
+    actionQueueRef.current = [];
     gravityAccumulatorRef.current = 0;
     lastFrameTimeRef.current = null;
   }, []);
@@ -432,19 +323,12 @@ export default function GameBoard({
 
     if (REPEATABLE_CONTROL_SET.has(control)) {
       const timing = repeatTimingRef.current[control];
-      if (isPressed) {
-        timing.pendingInitial = true;
-        timing.nextRepeatAt = timestamp;
-        timing.pressedAt = timestamp;
-      } else {
-        timing.pendingInitial = false;
-        timing.nextRepeatAt = 0;
-        timing.pressedAt = 0;
-      }
+      timing.pressedAt = isPressed ? timestamp : 0;
+      timing.nextRepeatAt = isPressed ? timestamp + INPUT_TIMING.DAS_MS : 0;
     }
 
-    if (isPressed && ONE_SHOT_CONTROL_SET.has(control)) {
-      queuedActionsRef.current[control] = true;
+    if (isPressed && QUEUED_CONTROL_SET.has(control)) {
+      actionQueueRef.current.push(control);
     }
   }, []);
 
@@ -466,32 +350,20 @@ export default function GameBoard({
     });
   }, [setControlPressed]);
 
-  const pollRepeatControl = useCallback((
-    control,
-    now,
-    initialDelay,
-    repeatInterval,
-    allowFire = true,
-  ) => {
+  // Auto-repeat after DAS; the initial tap itself is queued on keydown.
+  const pollRepeatControl = useCallback((control, now, allowFire = true) => {
     if (!keyStateRef.current[control]) return false;
 
     const timing = repeatTimingRef.current[control];
-    if (timing.pendingInitial && now >= timing.nextRepeatAt) {
-      timing.pendingInitial = false;
-      timing.nextRepeatAt = now + initialDelay;
-      return allowFire;
-    }
+    if (now < timing.nextRepeatAt) return false;
 
-    if (now >= timing.nextRepeatAt) {
-      timing.nextRepeatAt = now + repeatInterval;
-      return allowFire;
-    }
-
-    return false;
+    timing.nextRepeatAt = now + INPUT_TIMING.ARR_MS;
+    return allowFire;
   }, []);
 
   const endRun = useCallback((phase, totalLines, totalPiecesPlaced) => {
     const finalTimeMs = elapsedTimeRef.current;
+    runOverRef.current = true;
     clearLockTimer();
 
     setRunSummary({
@@ -570,7 +442,6 @@ export default function GameBoard({
   }, [clearInputState, clearLockTimer, gamePhase]);
 
   const backToMenu = useCallback(() => {
-    console.log("[GameBoard] Main Menu click handled");
     clearLockTimer();
     clearInputState();
     clearCountdownTimers();
@@ -581,7 +452,6 @@ export default function GameBoard({
     setCountdownLabel(null);
     setRunSummary(null);
     setGamePhase("idle");
-    console.log("[GameBoard] Triggering onBackToMenu callback");
     onBackToMenu?.();
   }, [clearCountdownTimers, clearInputState, clearLockTimer, onBackToMenu]);
 
@@ -595,82 +465,45 @@ export default function GameBoard({
   }, []);
 
   useEffect(() => {
-    console.log("[GameBoard] Auto-start countdown on mount");
     startCountdown();
   }, [startCountdown]);
 
-  const drawNextPiece = useCallback(() => {
-    const queuedNext = popNextPiece();
-    if (!queuedNext) return null;
-    return createPieceByType(queuedNext.type);
-  }, [popNextPiece]);
-
   const lockCurrentPiece = useCallback(() => {
-    const currentPiece = pieceRef.current;
-    const currentBoard = boardRef.current;
-    if (!currentPiece) return;
+    if (runOverRef.current) return;
+    const engine = engineRef.current;
+    const levelBeforeLock = levelForLines(engine.getState().lines);
 
-    if (!collides(currentBoard, currentPiece, 0, 1)) return;
+    const result = engine.lock();
+    if (!result) return;
 
     clearLockTimer();
+    syncGame();
 
-    const toppedOut = hasPieceCellsAboveTop(currentPiece);
-
-    const locked = mergePiece(currentBoard, currentPiece);
-    const { board: clearedBoard, linesCleared } = clearLines
-      ? clearLines(locked)
-      : { board: locked, linesCleared: 0 };
-
-    boardRef.current = clearedBoard;
-    setBoard(clearedBoard);
-
-    const nextPiecesPlaced = piecesPlacedRef.current + 1;
-    piecesPlacedRef.current = nextPiecesPlaced;
-    setPiecesPlaced(nextPiecesPlaced);
-
-    const nextTotalLines = linesRef.current + linesCleared;
-    linesRef.current = nextTotalLines;
-
-    if (linesCleared > 0) {
-      const currentLevel = levelRef.current;
-      setScore((s) => s + (SCORES?.[linesCleared] || 0) * (currentLevel + 1));
-      setLines(nextTotalLines);
-
-      const newLevel = Math.floor(nextTotalLines / LINES_PER_LEVEL);
-      if (newLevel !== levelRef.current) {
-        levelRef.current = newLevel;
-        setLevel(newLevel);
-      }
+    if (result.linesCleared > 0) {
+      setScore((s) => s + (SCORES[result.linesCleared] || 0) * (levelBeforeLock + 1));
     }
 
-    if (toppedOut) {
-      failRun(nextTotalLines, nextPiecesPlaced);
+    const { lines, piecesPlaced } = engine.getState();
+    if (result.lockOut) {
+      failRun(lines, piecesPlaced);
       return;
     }
 
-    if (isSprintMode && nextTotalLines >= sprintTargetLines) {
-      finishRun(nextTotalLines, nextPiecesPlaced);
+    if (isSprintMode && lines >= sprintTargetLines) {
+      finishRun(lines, piecesPlaced);
       return;
     }
 
-    const next = drawNextPiece();
-    if (!next) return;
-    if (collides(clearedBoard, next, 0, 0)) {
-      failRun(nextTotalLines, nextPiecesPlaced);
-      return;
+    if (result.blockOut) {
+      failRun(lines, piecesPlaced);
     }
-
-    canHoldRef.current = true;
-    setCanHold(true);
-    pieceRef.current = next;
-    setPiece(next);
   }, [
     clearLockTimer,
-    drawNextPiece,
     failRun,
     finishRun,
     isSprintMode,
     sprintTargetLines,
+    syncGame,
   ]);
 
   const scheduleLockTimer = useCallback(() => {
@@ -682,40 +515,23 @@ export default function GameBoard({
     }, LOCK_DELAY_MS);
   }, [lockCurrentPiece]);
 
-  const moveActivePiece = useCallback((dx, dy) => {
-    const currentPiece = pieceRef.current;
-    const currentBoard = boardRef.current;
-    if (!currentPiece) return;
-    if (collides(currentBoard, currentPiece, dx, dy)) {
-      if (dy > 0 && collides(currentBoard, currentPiece, 0, 1)) {
-        scheduleLockTimer();
-      }
-      return;
-    }
-
-    const moved = {
-      ...currentPiece,
-      x: currentPiece.x + dx,
-      y: currentPiece.y + dy,
-    };
-
-    if (collides(currentBoard, moved, 0, 1)) {
-      clearLockTimer();
+  // After a successful move/rotate: grounded pieces restart the lock delay,
+  // airborne pieces cancel it.
+  const refreshLockTimer = useCallback(() => {
+    clearLockTimer();
+    if (engineRef.current.isGrounded()) {
       scheduleLockTimer();
-    } else {
-      clearLockTimer();
     }
-
-    pieceRef.current = moved;
-    setPiece(moved);
   }, [clearLockTimer, scheduleLockTimer]);
 
-  const rotateActivePiece = useCallback((direction) => {
-    const currentPiece = pieceRef.current;
-    const currentBoard = boardRef.current;
-    if (!currentPiece) return;
+  const moveActivePiece = useCallback((dx) => {
+    if (!engineRef.current.move(dx, 0)) return;
+    refreshLockTimer();
+    syncGame();
+  }, [refreshLockTimer, syncGame]);
 
-    const rotated = tryRotatePieceSRS(currentBoard, currentPiece, direction, {
+  const rotateActivePiece = useCallback((direction) => {
+    const rotated = engineRef.current.rotate(direction, {
       debug: debugRotation,
       onDebug: (info) => {
         if (!debugRotation || typeof console === "undefined") return;
@@ -746,81 +562,29 @@ export default function GameBoard({
         console.groupEnd();
       },
     });
-    if (rotated === currentPiece) return;
+    if (!rotated) return;
 
-    if (collides(currentBoard, rotated, 0, 1)) {
-      clearLockTimer();
-      scheduleLockTimer();
-    } else {
-      clearLockTimer();
-    }
-
-    pieceRef.current = rotated;
-    setPiece(rotated);
-  }, [clearLockTimer, debugRotation, scheduleLockTimer]);
+    refreshLockTimer();
+    syncGame();
+  }, [debugRotation, refreshLockTimer, syncGame]);
 
   const hardDropActivePiece = useCallback(() => {
-    const currentPiece = pieceRef.current;
-    const currentBoard = boardRef.current;
-    if (!currentPiece) return;
-
-    let dropped = currentPiece;
-    while (!collides(currentBoard, dropped, 0, 1)) {
-      dropped = { ...dropped, y: dropped.y + 1 };
-    }
-
-    clearLockTimer();
-    pieceRef.current = dropped;
-    setPiece(dropped);
+    engineRef.current.dropToFloor();
     lockCurrentPiece();
-  }, [clearLockTimer, lockCurrentPiece]);
+  }, [lockCurrentPiece]);
 
   const holdActivePiece = useCallback(() => {
-    const currentPiece = pieceRef.current;
-    const currentBoard = boardRef.current;
-    if (!currentPiece || !canHoldRef.current) return;
-
-    canHoldRef.current = false;
-    setCanHold(false);
+    const engine = engineRef.current;
+    if (!engine.hold()) return;
 
     clearLockTimer();
+    syncGame();
 
-    if (!holdTypeRef.current) {
-      setHoldType(currentPiece.type);
-      holdTypeRef.current = currentPiece.type;
-
-      const next = drawNextPiece();
-      if (!next) {
-        canHoldRef.current = true;
-        setCanHold(true);
-        return;
-      }
-      if (collides(currentBoard, next, 0, 0)) {
-        failRun(linesRef.current, piecesPlacedRef.current);
-        return;
-      }
-
-      pieceRef.current = next;
-      setPiece(next);
-      return;
+    const { toppedOut, lines, piecesPlaced } = engine.getState();
+    if (toppedOut) {
+      failRun(lines, piecesPlaced);
     }
-
-    const swapped = createPieceByType(holdTypeRef.current);
-    if (!swapped) {
-      canHoldRef.current = true;
-      setCanHold(true);
-      return;
-    }
-    if (collides(currentBoard, swapped, 0, 0)) {
-      failRun(linesRef.current, piecesPlacedRef.current);
-      return;
-    }
-
-    setHoldType(currentPiece.type);
-    holdTypeRef.current = currentPiece.type;
-    pieceRef.current = swapped;
-    setPiece(swapped);
-  }, [clearLockTimer, drawNextPiece, failRun]);
+  }, [clearLockTimer, failRun, syncGame]);
 
   useEffect(() => {
     if (gamePhase !== "playing") {
@@ -836,12 +600,6 @@ export default function GameBoard({
   }, [clearCountdownTimers, clearLockTimer]);
 
   const processInputFrame = useCallback((now) => {
-    const currentKeyState = keyStateRef.current;
-    const prevKeyState = prevKeyStateRef.current;
-    const commitKeyFrame = () => {
-      prevKeyStateRef.current = { ...currentKeyState };
-    };
-
     if (lastFrameTimeRef.current === null) {
       lastFrameTimeRef.current = now;
     }
@@ -851,142 +609,78 @@ export default function GameBoard({
     if (deltaMs > 100) deltaMs = 100;
     lastFrameTimeRef.current = now;
 
-    const queued = queuedActionsRef.current;
-    const canPlay = gamePhase === "playing";
-
-    if (!canPlay) {
-      queued.hardDrop = false;
+    if (gamePhase !== "playing" || runOverRef.current) {
+      actionQueueRef.current = [];
       gravityAccumulatorRef.current = 0;
-      commitKeyFrame();
       return;
     }
 
     elapsedTimeRef.current += deltaMs;
     setElapsedTimeMs(elapsedTimeRef.current);
 
-    if (queued.hardDrop) {
-      queued.hardDrop = false;
-      hardDropActivePiece();
+    const actions = actionQueueRef.current;
+    actionQueueRef.current = [];
+    for (const action of actions) {
+      if (runOverRef.current) return;
+      if (action === "left") moveActivePiece(-1);
+      else if (action === "right") moveActivePiece(1);
+      else if (action === "hardDrop") hardDropActivePiece();
+      else if (action === "hold") holdActivePiece();
+      else if (action === "rotateCW") rotateActivePiece("cw");
+      else if (action === "rotateCCW") rotateActivePiece("ccw");
+      else if (action === "rotate180") rotateActivePiece("180");
     }
+    if (runOverRef.current) return;
 
-    const holdPressed = currentKeyState.hold && !prevKeyState.hold;
-    if (holdPressed) {
-      holdActivePiece();
-    }
+    const keyState = keyStateRef.current;
+    if (keyState.left && keyState.right) {
+      const leftTiming = repeatTimingRef.current.left;
+      const rightTiming = repeatTimingRef.current.right;
+      const primary = leftTiming.pressedAt >= rightTiming.pressedAt ? "left" : "right";
+      const secondary = primary === "left" ? "right" : "left";
 
-    const leftPressed = currentKeyState.left;
-    const rightPressed = currentKeyState.right;
-    if (leftPressed || rightPressed) {
-      if (leftPressed && rightPressed) {
-        const leftTiming = repeatTimingRef.current.left;
-        const rightTiming = repeatTimingRef.current.right;
-        const primary = leftTiming.pressedAt >= rightTiming.pressedAt ? "left" : "right";
-        const secondary = primary === "left" ? "right" : "left";
+      const shouldMovePrimary = pollRepeatControl(primary, now);
+      pollRepeatControl(secondary, now, false);
 
-        const shouldMovePrimary = pollRepeatControl(
-          primary,
-          now,
-          INPUT_TIMING.DAS_MS,
-          INPUT_TIMING.ARR_MS,
-          true,
-        );
-
-        pollRepeatControl(
-          secondary,
-          now,
-          INPUT_TIMING.DAS_MS,
-          INPUT_TIMING.ARR_MS,
-          false,
-        );
-
-        if (shouldMovePrimary) {
-          moveActivePiece(primary === "left" ? -1 : 1, 0);
-        }
-      } else if (leftPressed) {
-        if (pollRepeatControl("left", now, INPUT_TIMING.DAS_MS, INPUT_TIMING.ARR_MS)) {
-          moveActivePiece(-1, 0);
-        }
-      } else if (
-        pollRepeatControl("right", now, INPUT_TIMING.DAS_MS, INPUT_TIMING.ARR_MS)
-      ) {
-        moveActivePiece(1, 0);
+      if (shouldMovePrimary) {
+        moveActivePiece(primary === "left" ? -1 : 1);
       }
+    } else if (keyState.left) {
+      if (pollRepeatControl("left", now)) moveActivePiece(-1);
+    } else if (keyState.right) {
+      if (pollRepeatControl("right", now)) moveActivePiece(1);
     }
 
-    const rotateCWPressed = currentKeyState.rotateCW && !prevKeyState.rotateCW;
-    const rotateCCWPressed = currentKeyState.rotateCCW && !prevKeyState.rotateCCW;
-    const rotate180Pressed = currentKeyState.rotate180 && !prevKeyState.rotate180;
+    const engine = engineRef.current;
 
-    if (rotateCWPressed) {
-      rotateActivePiece("cw");
-    }
-
-    if (rotateCCWPressed) {
-      rotateActivePiece("ccw");
-    }
-
-    if (rotate180Pressed) {
-      rotateActivePiece("180");
-    }
-
-    if (currentKeyState.softDrop && useInfiniteSoftDrop) {
-      const currentPiece = pieceRef.current;
-      const currentBoard = boardRef.current;
-
-      if (!currentPiece) {
-        gravityAccumulatorRef.current = 0;
-        commitKeyFrame();
-        return;
+    if (keyState.softDrop && useInfiniteSoftDrop) {
+      if (engine.dropToFloor() > 0) {
+        clearLockTimer();
+        syncGame();
       }
-
-      if (collides(currentBoard, currentPiece, 0, 1)) {
-        scheduleLockTimer();
-        gravityAccumulatorRef.current = 0;
-        commitKeyFrame();
-        return;
-      }
-
-      clearLockTimer();
-      let dropped = currentPiece;
-      while (!collides(currentBoard, dropped, 0, 1)) {
-        dropped = { ...dropped, y: dropped.y + 1 };
-      }
-
-      pieceRef.current = dropped;
-      setPiece(dropped);
       scheduleLockTimer();
       gravityAccumulatorRef.current = 0;
-      commitKeyFrame();
       return;
     }
 
-    const gravityStepMs = currentKeyState.softDrop
+    const gravityStepMs = keyState.softDrop
       ? GRAVITY_FAST
-      : gravityForLevel(levelRef.current);
+      : gravityForLevel(levelForLines(engine.getState().lines));
     gravityAccumulatorRef.current += deltaMs;
 
+    let fell = false;
     while (gravityAccumulatorRef.current >= gravityStepMs) {
-      const currentPiece = pieceRef.current;
-      const currentBoard = boardRef.current;
-      if (!currentPiece) {
-        gravityAccumulatorRef.current = 0;
-        break;
-      }
-
-      if (collides(currentBoard, currentPiece, 0, 1)) {
+      if (!engine.move(0, 1)) {
         scheduleLockTimer();
         gravityAccumulatorRef.current = 0;
         break;
       }
 
       clearLockTimer();
-      const moved = { ...currentPiece, y: currentPiece.y + 1 };
-      pieceRef.current = moved;
-      setPiece(moved);
+      fell = true;
       gravityAccumulatorRef.current -= gravityStepMs;
     }
-
-    commitKeyFrame();
+    if (fell) syncGame();
   }, [
     clearLockTimer,
     gamePhase,
@@ -996,6 +690,7 @@ export default function GameBoard({
     pollRepeatControl,
     rotateActivePiece,
     scheduleLockTimer,
+    syncGame,
     useInfiniteSoftDrop,
   ]);
 
@@ -1064,6 +759,8 @@ export default function GameBoard({
     clearInputState();
   }, [clearInputState]);
 
+  const { board, piece, holdType, next: nextQueue, lines, piecesPlaced } = game;
+  const level = levelForLines(lines);
   const renderPiece = gamePhase === "playing" || gamePhase === "paused"
     ? piece
     : null;

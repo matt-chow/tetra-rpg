@@ -1,12 +1,30 @@
-# React + Vite
+# teto-clone
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A single-player, modern-guideline-style falling-block puzzle game built with React 19 and Vite. It is the foundation for a planned character-based puzzle RPG with duel combat (see [docs/ROADMAP.md](docs/ROADMAP.md)).
 
-Currently, two official plugins are available:
+## Setup
+```sh
+npm install
+npm run dev        # http://localhost:5173
+npm run test:run   # unit tests (Vitest)
+npm run lint
+npm run build
+```
+URL options: `?seed=<text>` gives a reproducible piece sequence, and `?debugRotation` logs rotation kicks to the console.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Current features
+- 40-line Sprint mode with countdown, timer, PPS and results overlay
+- 7-bag randomizer (seedable), 5-piece next preview, hold (once per piece)
+- SRS rotation with wall kicks, plus TETR.IO-style 180° rotation
+- Ghost piece, hard drop, soft drop (or an "infinite" sonic-drop toggle), 500 ms lock delay
+- DAS 150 ms / ARR 40 ms, pause, restart, main menu
 
-## Expanding the ESLint configuration
+Controls: arrows move/soft drop, Up/X rotate CW, Z rotate CCW, A rotate 180, Space hard drop, C hold, P/Esc pause, R restart.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Known limitations
+- No combos, back-to-back, T-spin detection, garbage or versus play yet
+- Lock delay resets without limit (pieces can be stalled indefinitely)
+- No hidden buffer rows above the 20-row field
+- Keybinds and handling (DAS/ARR) are not configurable
+
+See [docs/AUDIT.md](docs/AUDIT.md) for the full list and [AGENTS.md](AGENTS.md) for contributor rules.

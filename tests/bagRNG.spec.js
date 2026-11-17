@@ -41,3 +41,42 @@ describe("7-bag generator", () => {
     expect(snapshot.recentDraws.slice(-10)).toEqual(sequenceA);
   });
 });
+
+describe("7-bag invariants", () => {
+  const SORTED_TYPES = ["I", "J", "L", "O", "S", "T", "Z"];
+
+  it("every aligned group of 7 draws is a permutation of all 7 pieces (5000 bags)", () => {
+    const rng = createBagRNG({ seed: "invariant" });
+    for (let bag = 0; bag < 5000; bag++) {
+      const types = Array.from({ length: 7 }, () => rng.next().type);
+      expect(types.sort()).toEqual(SORTED_TYPES);
+    }
+  });
+
+  it("refills exactly at bag boundaries", () => {
+    const rng = createBagRNG({ seed: "boundary" });
+    for (let i = 1; i <= 21; i++) {
+      rng.next();
+      const { remaining, refillCount } = rng.snapshot();
+      expect(remaining).toHaveLength((7 - (i % 7)) % 7);
+      expect(refillCount).toBe(Math.ceil(i / 7));
+    }
+  });
+
+  it("stays a permutation with a degenerate injected random", () => {
+    for (const value of [0, 0.999999]) {
+      const rng = createBagRNG({ random: () => value });
+      const types = Array.from({ length: 14 }, () => rng.next().type);
+      expect(types.slice(0, 7).sort()).toEqual(SORTED_TYPES);
+      expect(types.slice(7).sort()).toEqual(SORTED_TYPES);
+    }
+  });
+
+  it("different seeds give different sequences", () => {
+    const a = createBagRNG({ seed: "a" });
+    const b = createBagRNG({ seed: "b" });
+    const seqA = Array.from({ length: 28 }, () => a.next().type);
+    const seqB = Array.from({ length: 28 }, () => b.next().type);
+    expect(seqA).not.toEqual(seqB);
+  });
+});
