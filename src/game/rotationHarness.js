@@ -1,6 +1,11 @@
-import { createEmptyBoard } from "./board.js";
+import { COLS, VISIBLE_ROWS } from "./constants.js";
 import { createPieceByType } from "./pieces.js";
 import { getKickOffsets, getPieceShape, tryRotate } from "./rotation.js";
+
+// Golden cases are written against a 20-row field; rotation collision uses board.length.
+function createFieldBoard(rows = VISIBLE_ROWS) {
+  return Array.from({ length: rows }, () => Array(COLS).fill(0));
+}
 
 function cloneBoard(board) {
   return board.map((row) => row.slice());
@@ -58,7 +63,7 @@ export function runKickConformanceCase(testCase, options = {}) {
   const profile = options.profile || testCase.profile || "tetrio";
   const board = testCase.board
     ? withFilledCells(testCase.board, testCase.filledCells || [])
-    : withFilledCells(createEmptyBoard(), testCase.filledCells || []);
+    : withFilledCells(createFieldBoard(testCase.rows), testCase.filledCells || []);
 
   const piece = buildPiece(testCase);
   const toState =

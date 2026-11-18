@@ -298,6 +298,12 @@ export function tryRotatePieceSRS(board, piece, direction, optionsOrCollides) {
 }
 
 export function tryRotate(board, piece, direction, optionsOrCollides) {
+  return tryRotateDetailed(board, piece, direction, optionsOrCollides).piece;
+}
+
+// Like tryRotate, but also reports which kick was used (-1 when rotation failed).
+// T-spin detection needs it: the 5th SRS kick upgrades a mini to a full T-spin.
+export function tryRotateDetailed(board, piece, direction, optionsOrCollides) {
   const { collidesFn, debug, onDebug, profile } = normalizeRotationOptions(optionsOrCollides);
   const fromRot = piece.rot ?? 0;
   const toRot = rotateState(fromRot, direction);
@@ -310,7 +316,8 @@ export function tryRotate(board, piece, direction, optionsOrCollides) {
   const originCells = getOccupiedCells(piece);
   const rawRotatedOffsets = getFilledOffsets(rotatedShape);
 
-  for (const [dx, dy] of kicks) {
+  for (let kickIndex = 0; kickIndex < kicks.length; kickIndex++) {
+    const [dx, dy] = kicks[kickIndex];
     const usingBuiltInCollision = collidesFn === collidesWithBoard;
     const inspection = usingBuiltInCollision
       ? inspectPlacement(board, rotated, dx, dy)
@@ -345,7 +352,7 @@ export function tryRotate(board, piece, direction, optionsOrCollides) {
           profile,
         });
       }
-      return accepted;
+      return { piece: accepted, kickIndex };
     }
   }
 
@@ -366,7 +373,7 @@ export function tryRotate(board, piece, direction, optionsOrCollides) {
     });
   }
 
-  return piece;
+  return { piece, kickIndex: -1 };
 }
 
 export function getRotationAuditSummary() {

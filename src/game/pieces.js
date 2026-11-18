@@ -1,10 +1,9 @@
-import { COLS, PIECE_IDS } from "./constants.js";
+import { COLS, PIECE_IDS, SPAWN_Y } from "./constants.js";
 import { getPieceShape } from "./rotation.js";
 
-const PIECE_TYPES = ["O", "I", "T", "S", "Z", "J", "L"];
+export const PIECE_TYPES = ["O", "I", "T", "S", "Z", "J", "L"];
 
-// Center the piece horizontally by its width.
-// In classic rules some pieces have special spawn columns; centering is fine for now.
+// Center the piece horizontally by its width (guideline columns: JLSTZ 3-5, I 3-6, O 4-5).
 function spawnX(shape) {
   const w = shape[0].length;
   return Math.floor(COLS / 2) - Math.ceil(w / 2);
@@ -20,7 +19,7 @@ function spawnPiece(type) {
     shape,
     rot: 0, // spawn orientation index used by SRS kicks (0, R, 2, L)
     x: spawnX(shape),
-    y: 0, // spawn at top; some blocks will appear partly above (handled in collision)
+    y: SPAWN_Y, // rows 21-22: just above the visible field, inside the buffer
   };
 }
 
@@ -50,7 +49,7 @@ function hashSeed(seed) {
   return hash >>> 0;
 }
 
-function createSeededRandom(seed) {
+export function createSeededRandom(seed) {
   let state = hashSeed(seed) || 1;
 
   return function nextRandom() {

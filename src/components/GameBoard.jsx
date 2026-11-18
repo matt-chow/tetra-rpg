@@ -9,11 +9,15 @@ import {
   ROWS,
   CELL_SIZE,
   COLORS,
-  GRAVITY_FAST,
-  SCORES,
-  gravityForLevel,
-  LINES_PER_LEVEL,
 } from "../game/constants";
+
+// Legacy wall-clock tuning, kept local until this component is replaced by the frame loop.
+const GRAVITY_FAST = 60;
+const SCORES = { 1: 100, 2: 300, 3: 500, 4: 800 };
+const LINES_PER_LEVEL = 10;
+function gravityForLevel(level) {
+  return Math.max(100, 800 - level * 60);
+}
 
 // Overlay the active piece onto a copy of the board to render.
 function cellsWithCurrentPiece(board, piece) {

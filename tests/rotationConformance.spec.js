@@ -38,7 +38,7 @@ describe("strict SRS vs tetr.io 180 profile", () => {
     const piece = createPieceByType("T");
     piece.rot = 0;
     piece.x = 4;
-    piece.y = 18;
+    piece.y = board.length - 2; // resting on the floor
 
     const strict = tryRotate(board, piece, "180", { profile: "srs" });
     const tetrio = tryRotate(board, piece, "180", { profile: "tetrio" });
