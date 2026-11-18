@@ -32,3 +32,37 @@ Queued actions or a pending lock timer could act after the run ended within the 
 5. **Low: missing modern mechanics.** No T-spin detection, combos, back-to-back, garbage, or drop points.
 6. **Low: unused code.** `src/components/ResultsScreen.jsx`, `src/App.css` and `src/assets/react.svg` are not imported. They were kept because removing them was out of scope. `App.jsx` still logs to the console.
 7. **Low: no component-level tests.** Input timing, countdown and phase transitions have no automated tests (no DOM test environment is installed).
+
+# Multiplayer readiness (2026-11)
+
+**Verdict:** the rules layer is a good base. The timing and orchestration layer is not ready yet. `src/game` is pure, seedable and runs in Node unchanged, so a server or a peer can replay a game from `seed + inputs`. But half of what decides the outcome of a game (gravity, lock delay, scoring, win/lose) lives in `GameBoard.jsx` and runs on wall-clock time, so two machines fed the same inputs can still diverge.
+
+## Recommended model
+Versus falling-block games don't need full lockstep. Each player's board is independent, and the only interaction is garbage. The cheapest model that holds up:
+- Each client simulates **its own** board locally with zero input latency.
+- Clients send a compact input log (`[tick, action]`) plus outgoing attack events. Opponent boards are rendered from relayed snapshots or by replaying that log.
+- The server (Node, running the same `src/game` code) replays logs to validate results and resolve garbage timing. Periodic state hashes catch desyncs.
+
+This needs about 1 KB/s per player, and nothing has to be rolled back except incoming garbage.
+
+## Blockers (must fix first)
+1. **Time is outside the engine (high).** Gravity uses a rAF accumulator with deltas clamped to 100 ms (`GameBoard.jsx` `processInputFrame`), lock delay is a `setTimeout`, and DAS/ARR use `performance.now()`. The same inputs at different frame rates give different games. Fix: `engine.tick()` on a fixed step (e.g. 60 Hz), with gravity, lock delay and the lock-reset cap inside the engine. The component converts wall time into a number of ticks.
+2. **Outcome rules live in the component (high).** Scoring, level and gravity selection, sprint completion and top-out handling after hold are all in `GameBoard.jsx`. A server can't compute them. Fix: move them into `src/game`, and make `lock()` return the full clear result (lines, T-spin, combo, B2B, attack).
+3. **No input log (high).** Actions go straight from the queue to engine calls and are not recorded. Fix: one `apply(action)` entry point on the engine (`left | right | softDrop | hardDrop | rotateCW | rotateCCW | rotate180 | hold`) that records `[tick, action]`. Soft drop must become a press/release action instead of polled key state. DAS/ARR stay client-side as handling that only produces actions.
+
+## Needed for versus
+4. **No garbage API or buffer rows (medium).** There is no `receiveGarbage(rows, hole)`, and there are no hidden rows above the field, so garbage pushes the stack straight into a top-out. Garbage holes need their **own** seeded RNG stream, so incoming attacks don't shift the piece sequence.
+5. **No serialize/restore (medium).** The engine state is closure-private, and the bag PRNG state can't be exported. That blocks reconnect, spectator join and resync after a desync. Fix: `engine.serialize()` / `createGame({ restore })`, including the PRNG state and bag contents, plus a cheap `hash()` for desync checks.
+6. **One-player component (medium).** `GameBoard.jsx` (1,100+ lines) mixes input, timing, rules glue and rendering for a single engine. Split it into a pure `<Board snapshot>` view (reused for opponents and spectators), a `useLocalPlayer` controller hook for input and timing, and a match coordinator that owns N engines and routes garbage.
+
+## Efficiency
+7. **Re-render every frame (medium).** `setElapsedTimeMs` re-renders all 200 cells per frame. Two boards double that cost, and four (FFA or spectating) quadruple it. Render the timer separately, memoize the board, or draw boards on `<canvas>`.
+8. **Countdown and match start use local `setTimeout` (low).** Match start needs a server-provided start time and seed, not `?seed=` or `Math.random`.
+
+## Already in good shape
+- Deterministic, integer-only seeded PRNG (`Math.imul`), so results match across browsers and Node.
+- Board and piece updates are immutable and `getState()` is plain data, so snapshots are cheap to send.
+- Discrete inputs are already queued in press order (invariant 5), which maps directly onto an input log.
+- No DOM or React code in `src/game`, so it runs on a server as is.
+
+Suggested order: 1 → 3 → 2 → 5 → 4 → 6 → 7. Steps 1–3 are roadmap stage 1 and also give you replays.
