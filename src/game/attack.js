@@ -29,9 +29,14 @@ function isSolid(board, x, y) {
 // 3-corner T-spin check for a T whose last successful action was a rotation.
 // Full when both front corners are filled, or when the rotation used the 5th
 // (TST) kick of a quarter turn; otherwise mini. Returns "none" | "mini" | "full".
-export function detectTSpin(board, piece, { kickIndex = -1, direction = "cw" } = {}) {
+export function detectTSpin(board, piece, lastRotation) {
+  return classifyTSpin((x, y) => isSolid(board, x, y), piece, lastRotation);
+}
+
+// Same rule over any occupancy test; the AI calls this with its bitboard.
+export function classifyTSpin(solidAt, piece, { kickIndex = -1, direction = "cw" } = {}) {
   if (piece.type !== "T") return "none";
-  const solid = TSPIN_CORNERS.map(([cx, cy]) => isSolid(board, piece.x + cx, piece.y + cy));
+  const solid = TSPIN_CORNERS.map(([cx, cy]) => solidAt(piece.x + cx, piece.y + cy));
   if (solid.filter(Boolean).length < 3) return "none";
   const [a, b] = FRONT_CORNERS[piece.rot];
   if (solid[a] && solid[b]) return "full";

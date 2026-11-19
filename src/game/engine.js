@@ -427,6 +427,7 @@ export function createGame({
         incoming: incoming.map((g) => ({ ...g })),
         lockFrames,
         lockResets,
+        lastRotation,
         stats: { ...stats },
       };
     },
