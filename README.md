@@ -2,9 +2,9 @@
 
 A fast, modern falling-block puzzle game for the browser, growing into a character-based puzzle RPG with head-to-head duels.
 
-Today it's a polished single-player 40-line Sprint with modern handling: 7-bag randomizer, hold, five-piece preview, SRS rotation with 180° spins, and tight DAS/ARR. Next up are versus play, garbage attacks, heroes with their own abilities, and a campaign of boss encounters. See the [roadmap](docs/ROADMAP.md).
+It plays by TETR.IO Season 1 versus rules: 7-bag, hold, five-piece preview, SRS+ with 180° spins, T-spins, combos, back-to-back, perfect clears and garbage with cancellation. You can duel four AI opponents, practice endlessly with optional garbage training, or race a 40-line Sprint. Heroes, abilities and a campaign come next. See the [roadmap](docs/ROADMAP.md).
 
-> **Status:** early development. The core game plays well, while combat, heroes and online play are still on the roadmap.
+> **Status:** early development. Versus against the AI is playable. Heroes, campaign and online play are still on the roadmap.
 
 ## Play locally
 
@@ -19,13 +19,26 @@ npm run dev
 
 Then open http://localhost:5173.
 
-URL options:
-- `?seed=<text>`: play a reproducible piece sequence (handy for practice and bug reports)
-- `?debugRotation`: log rotation kick attempts to the browser console
+- `?seed=<text>` makes every run use a fixed seed (pieces, garbage holes and AI decisions), which is handy for practice and bug reports.
+- **Shift + `** toggles the developer overlay during a game: AI stats and decisions, queues, garbage, frame stepping, and restart with a seed.
 
-## Controls
+## Modes
 
-| Action | Key |
+- **AI Battle:** pick an opponent, then versus intro, 3-2-1 and a duel. The first to top out loses. Afterwards: rematch, change difficulty or return to the menu.
+
+  | Opponent | Speed | Style |
+  |---|---|---|
+  | Apprentice | 0.4–0.8 PPS | human-paced taps, shallow search, occasional mistakes |
+  | Expert | 0.9–1.5 PPS | human-paced, two-piece lookahead, builds for quads and T-spins |
+  | Master | 1.7–2.5 PPS | fast movement, three-piece lookahead, T-spins and B2B |
+  | Legendary | 2.8–4.0 PPS | fast movement, four-piece lookahead, no mistakes |
+
+- **Practice:** endless solo play with adjustable gravity, an optional garbage trainer, and live PPS/APM.
+- **40L Sprint:** clear 40 lines as fast as you can.
+
+## Controls (rebindable in Settings)
+
+| Action | Default key |
 |---|---|
 | Move left / right | ← / → |
 | Soft drop | ↓ |
@@ -37,33 +50,13 @@ URL options:
 | Pause | P or Esc |
 | Restart | R |
 
-## Features
-
-- **40-line Sprint** with countdown, timer, pieces-per-second and a results screen
-- **7-bag randomizer**, seedable for reproducible runs
-- **Hold** (once per piece) and a **5-piece next preview**
-- **SRS rotation** with wall kicks, plus TETR.IO-style 180° rotation
-- **Ghost piece**, hard drop, soft drop, and an optional instant soft drop
-- **Handling:** DAS 150 ms, ARR 40 ms, 500 ms lock delay
-
-## Roadmap
-
-1. **Stabilize:** fixed-step engine timing, replays, lock-reset cap, hidden buffer rows
-2. **Versus:** T-spins, combos, back-to-back, garbage and an AI opponent
-3. **Heroes:** characters with stat modifiers and abilities
-4. **Campaign:** encounters and boss mechanics
-5. **Online multiplayer**
-
-Details are in [docs/ROADMAP.md](docs/ROADMAP.md).
+Settings also cover DAS, ARR and soft drop speed (instant ARR and soft drop allowed), volume, ghost piece, grid and animations. They're saved in your browser.
 
 ## Known limitations
 
-- No T-spins, combos, back-to-back, garbage or versus play yet
-- Lock delay resets without limit, so a grounded piece can be stalled indefinitely
-- No hidden buffer rows above the 20-row field
-- Keybinds and handling (DAS/ARR) aren't configurable yet
-
-The full list is in [docs/AUDIT.md](docs/AUDIT.md).
+- Some TETR.IO details are assumed rather than verified, such as gravity, lock delay and SRS+ I-piece kicks. See [docs/AUDIT.md](docs/AUDIT.md).
+- No replays, online play, touch controls or heroes yet.
+- Tested by script in headless Edge only. There are no manual checks on other browsers or on mobile yet.
 
 ## Development
 
@@ -71,11 +64,18 @@ The full list is in [docs/AUDIT.md](docs/AUDIT.md).
 npm run test:run   # unit tests (Vitest)
 npm run lint       # ESLint
 npm run build      # production build into dist/
+npm run bench:ai   # AI benchmark: solo PPS/attack per profile and tier-vs-tier duels
 ```
 
-Built with React 19 and Vite. All game rules live in plain JavaScript under `src/game/` (no React, timers or DOM), so they're deterministic and easy to test. The React layer in `src/components/` handles timing, input and rendering.
+Built with React 19 and Vite.
+- `src/game/` holds all rules: plain JavaScript on a 60 Hz frame clock, with no timers, randomness or DOM, so matches are deterministic and testable in Node.
+- `src/ai/` holds the bots.
+- `src/input/` handles DAS/ARR.
+- `src/ui/` holds the screens and the canvas renderer.
 
-- [Architecture](docs/ARCHITECTURE.md): how the engine and UI fit together
+Docs:
+- [Architecture](docs/ARCHITECTURE.md): how the engine, match, AI and UI fit together
+- [Audit](docs/AUDIT.md): rule decisions, assumptions and known issues
 - [Rotation audit](docs/rotation-audit.md): SRS and kick-table conformance
 - [AGENTS.md](AGENTS.md): contributor rules and invariants (read this before changing the engine)
 

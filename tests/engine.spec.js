@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createGame, NEXT_PREVIEW_COUNT } from "../src/game/engine.js";
 import { createBagRNG } from "../src/game/pieces.js";
 import { clearLines } from "../src/game/board.js";
-import { COLS, ROWS } from "../src/game/constants.js";
+import { COLS, ROWS, SPAWN_Y } from "../src/game/constants.js";
 
 function bagSequence(seed, count) {
   const rng = createBagRNG({ seed });
@@ -108,7 +108,7 @@ describe("engine hold", () => {
     game.hold();
     const { piece } = game.getState();
     expect(piece.rot).toBe(0);
-    expect(piece.y).toBe(0);
+    expect(piece.y).toBe(SPAWN_Y);
   });
 });
 

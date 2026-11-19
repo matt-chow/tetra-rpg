@@ -1,4 +1,46 @@
-# Audit (2026-11)
+# Audit
+
+## Season 1 rules, AI opponents and game modes (2026-11-18)
+
+### Root causes found and fixed
+1. **Rules and time lived in the component.** Gravity ran on a rAF accumulator, lock delay was a `setTimeout`, and scoring, sprint and top-out lived in `GameBoard.jsx`. As a result, the same inputs at different frame rates gave different games. Fix: `engine.tick()` on a 60 Hz frame clock now owns gravity, lock delay, the reset cap and garbage travel, and `createMatch` owns win/lose. The UI only converts wall time into frames. This also fixes the hidden-tab lock and the per-frame full re-render, since the board is now a canvas drawn from engine state.
+2. **Lock event ordered after the next spawn.** Consumers saw `spawn` before the `lock` that caused it. The lock event is now pushed before spawning (tests/rules.spec.js "event order").
+3. **AI 180° loop.** The bot's path search started every piece from spin state 0 even after the engine had registered a kick, so it could re-plan a 180 forever. The path start now uses the engine's `lastRotation`, and a 40-input cap per piece guarantees progress (tests/ai.spec.js).
+4. **Apprentice exceeded its PPS range.** Human-paced bots soft-dropped early, and lock delay then auto-locked the piece ahead of schedule. Taps are now spread across the piece interval (tests/ai.spec.js "PPS ranges").
+
+### Intentional rule changes
+| Rule | Before | Now |
+|---|---|---|
+| Field | 10×20, spawn in rows 0–1 | 10×40, 20 hidden buffer rows, spawn at y=18 (just above the visible field) |
+| Lock delay | 500 ms, unlimited resets | 30 frames, 15 move/rotate resets, counter refreshed on a new lowest row, gravity never spends resets |
+| Gravity | level curve (lines / 10) | constant 0.02G (S1 default), configurable in Practice |
+| Scoring | 100/300/500/800 × level | removed; results show attack, APM, PPS, lines, T-spins |
+| T-spin / combo / B2B / PC | none | S1 attack table; 3-corner T-spin with mini; TST kick upgrades mini to full; S1 combo table and B2B chaining; PC +10 |
+| Garbage | none | 20-frame travel; outgoing attack cancels incoming first (including garbage still travelling); at most 8 lines inserted per lock; no insertion on a clearing lock; hole changes between attacks; separate hole RNG |
+| Top-out | block out, any cell above row 0 | block out, lock out (whole piece in the buffer), garbage pushing blocks out of the 40-row field |
+| Handling | DAS 150 ms / ARR 40 ms, fixed | DAS 150 / ARR 33 / SDF 20 by default, configurable and persisted (ARR 0 = instant, SDF 41 = instant) |
+| `?debugRotation` | console kick logs | removed with the old component; `tryRotateDetailed(..., { debug, onDebug })` still supports it |
+
+### Assumptions and unverified behaviour
+Sources: <https://tetris.wiki/TETR.IO>, <https://tetris.wiki/Super_Rotation_System>, <https://github.com/tetrio/issues/issues/506>.
+- **Taken from those sources:** attack table, S1 combo multiplier (base × (1 + 0.25c), log curve from c ≥ 2), B2B chaining (`floor(1 + log1p(0.8b))` plus the fractional part), 20-frame garbage travel, 180 kicks.
+- **Assumed, not checked against TETR.IO itself:** gravity 0.02G, lock delay 30 frames with 15 resets, garbage cap 8, the clear-blocks-insertion rule, hole change on every attack, PC +10, spawn y=18.
+- **Unverified:** TETR.IO SRS+ I-piece kicks. Standard SRS I kicks are kept (see rotation-audit.md).
+- **Browser checks (headless Edge driven over CDP, 2026-11-18):**
+  - Played full duels against all four opponents through the Web Worker. Live PPS: Apprentice 0.68, Expert 1.22, Master 2.12, Legendary 3.43.
+  - Exercised the intro, countdown, pause menu, results card and dev overlay with plan outlines.
+  - Exercised Practice with the garbage trainer, DAS to both walls, hold, R restart, and key rebinding persisted to localStorage.
+  - No console errors.
+  - **Not checked:** real-device input feel and latency, audio output, touch or mobile, Safari and Firefox. A human player has not played a full duel against each tier.
+
+### Remaining weaknesses
+- In the solo benchmark, Apprentice tops out under steady trainer garbage (1–3 lines every 4 s) and sends almost nothing (0.04 attack per piece). That makes it easy, which is the intent, but it may be too passive.
+- The AI evaluates T-spin doubles (TSDs) but plans no TST/TSD stacking setups, perfect clears beyond the search depth, or downstacking strategy. Garbage pressure is handled only through the danger and burn weights.
+- Expert and below have no awareness of the opponent's board.
+- A fixed seed fixes pieces, garbage holes and AI choices. In the browser, though, worker plans arrive after a wall-clock delay, so the frame a bot acts on can differ between runs and a seeded duel is not frame-identical. Tests and `bench:ai` use the sync planner and are fully deterministic. A true replay needs the bot's decision frames recorded in the input log.
+- There are no DOM or component tests. Screen flow and keyboard handling were verified only by the scripted browser run above.
+
+## Earlier audit (2026-11, pre-S1)
 
 ## Fixed
 
@@ -24,7 +66,8 @@ Queued actions or a pending lock timer could act after the run ended within the 
 - SRS / SRS+ kicks: existing conformance tests pass.
 - Spawn columns match the guideline (JLSTZ cols 3–5, I 3–6, O 4–5).
 
-## Remaining issues (by severity)
+## Remaining issues at that time
+The S1 work above resolves items 1–6: the reset cap, frame clock, canvas rendering, buffer rows and modern mechanics, plus removing the dead files.
 1. **Medium: lock delay resets without limit.** Every successful move or rotate on the ground restarts the 500 ms timer, so a piece can be stalled forever. TETR.IO and the guideline cap resets at 15. This is a rule change, so it was left for a deliberate decision.
 2. **Medium: wall-clock lock timer.** Lock delay is a `setTimeout`, while gravity and the timer use rAF time. In a hidden tab rAF stops but the timeout can still lock the piece. It also blocks deterministic replay and multiplayer (see ARCHITECTURE).
 3. **Medium: full re-render every frame.** `setElapsedTimeMs` re-renders 200 board cells each frame. It's fine on desktop and the cheapest win if performance matters.
@@ -34,6 +77,8 @@ Queued actions or a pending lock timer could act after the run ended within the 
 7. **Low: no component-level tests.** Input timing, countdown and phase transitions have no automated tests (no DOM test environment is installed).
 
 # Multiplayer readiness (2026-11)
+
+> **Update 2026-11-18:** resolved: blockers 1–2 and items 4, 6, 7 and 8. That covers the frame-clock engine, the `apply(action)` entry point, the garbage API with buffer rows and a separate hole RNG, `createMatch` for N boards, canvas rendering and a frame-counted countdown. Still open: 3 (recording the input log) and 5 (serialize/restore and hash).
 
 **Verdict:** the rules layer is a good base. The timing and orchestration layer is not ready yet. `src/game` is pure, seedable and runs in Node unchanged, so a server or a peer can replay a game from `seed + inputs`. But half of what decides the outcome of a game (gravity, lock delay, scoring, win/lose) lives in `GameBoard.jsx` and runs on wall-clock time, so two machines fed the same inputs can still diverge.
 
