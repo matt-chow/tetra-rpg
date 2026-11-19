@@ -32,7 +32,7 @@ export const DEFAULT_SETTINGS = {
   // Milliseconds; sdf is a gravity multiplier, 41 or more means instant (sonic) soft drop.
   handling: { das: 150, arr: 33, sdf: 20 },
   audio: { volume: 0.5, muted: false },
-  graphics: { ghost: true, grid: true, animations: true, shake: true },
+  graphics: { ghost: true, grid: true, animations: true },
 };
 
 export const INSTANT_SDF = 41;

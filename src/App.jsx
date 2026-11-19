@@ -1,54 +1,62 @@
 import { useCallback, useEffect, useState } from "react";
-import GameBoard from "./components/GameBoard";
-import MenuScreen from "./components/MenuScreen";
-import { SPRINT_TARGET_LINES } from "./game/sprint";
+import MatchView from "./ui/MatchView.jsx";
+import SettingsScreen from "./ui/SettingsScreen.jsx";
+import { Menu, OpponentSelect, PracticeSetup } from "./ui/Screens.jsx";
+import { loadSettings, saveSettings } from "./settings.js";
+import { setAudioSettings } from "./audio.js";
+import { theme } from "./ui/theme.js";
 
-const GAME_MODES = {
-  SPRINT: "sprint",
-};
-
+// Screen flow: menu -> (select -> battle) | (practiceSetup -> practice) | sprint | settings.
+// Future campaign / hero-select screens slot in here as more `screen` values.
 export default function App() {
-  const [started, setStarted] = useState(false);
-
-  const handleStartSprint = useCallback(() => {
-    console.log("[App] Starting sprint run");
-    setStarted(true);
-  }, []);
-
-  const handleBackToMenu = useCallback(() => {
-    console.log("[App] onBackToMenu triggered");
-    setStarted(false);
-  }, []);
+  const [screen, setScreen] = useState("menu");
+  const [settingsReturn, setSettingsReturn] = useState("menu");
+  const [settings, setSettings] = useState(loadSettings);
+  const [opponent, setOpponent] = useState(null);
+  const [practice, setPractice] = useState({ gravity: 0.02, trainer: null });
 
   useEffect(() => {
-    if (!started) {
-      console.log("[App] Switched to menu view");
-    }
-  }, [started]);
+    saveSettings(settings);
+    setAudioSettings(settings.audio);
+  }, [settings]);
+
+  const toMenu = useCallback(() => setScreen("menu"), []);
+  const openSettings = (from) => {
+    setSettingsReturn(from);
+    setScreen("settings");
+  };
+
+  let content;
+  if (screen === "menu") {
+    content = <Menu onSelect={(id) => (id === "settings" ? openSettings("menu") : setScreen(id === "battle" ? "select" : id === "practice" ? "practiceSetup" : id))} />;
+  } else if (screen === "select") {
+    content = <OpponentSelect onBack={toMenu} onPick={(p) => { setOpponent(p); setScreen("battle"); }} />;
+  } else if (screen === "battle") {
+    content = <MatchView key={opponent.id} mode="battle" profile={opponent} settings={settings} onExit={toMenu} onChangeOpponent={() => setScreen("select")} />;
+  } else if (screen === "practiceSetup") {
+    content = <PracticeSetup value={practice} onChange={setPractice} onStart={() => setScreen("practice")} onBack={toMenu} onSettings={() => openSettings("practiceSetup")} />;
+  } else if (screen === "practice") {
+    content = <MatchView mode="practice" practice={practice} settings={settings} onExit={toMenu} />;
+  } else if (screen === "sprint") {
+    content = <MatchView mode="sprint" settings={settings} onExit={toMenu} />;
+  } else {
+    content = <SettingsScreen settings={settings} onChange={setSettings} onBack={() => setScreen(settingsReturn)} />;
+  }
 
   return (
-    <div
+    <main
       style={{
-        height: "100vh",
+        minHeight: "100vh",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "#121216",
+        background: theme.appBg,
         color: "#fff",
-        overflow: "hidden",
         padding: 10,
         boxSizing: "border-box",
       }}
     >
-      {!started ? (
-        <MenuScreen onStartSprint={handleStartSprint} />
-      ) : (
-        <GameBoard
-          gameMode={GAME_MODES.SPRINT}
-          sprintTargetLines={SPRINT_TARGET_LINES}
-          onBackToMenu={handleBackToMenu}
-        />
-      )}
-    </div>
+      {content}
+    </main>
   );
 }
