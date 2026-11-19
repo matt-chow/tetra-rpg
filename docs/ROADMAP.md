@@ -1,25 +1,26 @@
 # Roadmap
 
-## 1. Stabilize (next)
-- Decide on the lock-delay reset cap (15, TETR.IO-style) and implement it in one place.
-- Move gravity and lock delay into the engine as `tick(ms)` with a fixed step, so the component only feeds time and inputs. This enables replays.
-- Record `[frame, action]` input logs + seed, plus a replay test harness.
-- Add hidden buffer rows and guideline lock-out/block-out.
-- Throttle timer re-renders; add a DOM test environment for input/phase tests.
+## Done
+- Frame-based engine with TETR.IO Season 1 rules: buffer rows, lock-reset cap, T-spins, combos, B2B, perfect clears, attack table, garbage queue with travel, cancel and cap.
+- Match coordinator for N boards with attack routing, a garbage trainer and a sprint goal.
+- Beam-search AI in a Web Worker with four config-driven opponents (Apprentice, Expert, Master, Legendary).
+- AI Battle, Practice and 40L Sprint screens, persisted settings with key rebinding, and a developer overlay.
 
-## 2. Versus core
-- Clear classification returned from `lock()`: lines, T-spin (3-corner), combo, back-to-back, all-clear.
-- Attack table → garbage queue with cancellation; `receiveGarbage` on the engine.
-- Two engines side by side, plus a simple AI opponent driven through the same input API.
+## 1. Polish and replays (next)
+- Record `[frame, action]` input logs around `engine.apply`, plus a replay viewer and replay regression tests.
+- `engine.serialize()` / `hash()` for desync checks and resync.
+- Verify SRS+ I-piece kicks and S1 gravity against TETR.IO and adjust (see AUDIT, unverified items).
+- Opponent-board danger cues, a garbage-hole preview and better attack animations.
+- DOM tests for screen flow and input (needs a DOM test environment).
 
-## 3. Heroes and progression
-- Hero = data: stat modifiers (gravity, lock delay, preview count, attack multipliers) and abilities triggered by engine events (clear, combo, garbage received).
-- Ability system subscribes to engine results. Rules stay in the engine and are parameterized, not forked.
+## 2. Heroes and progression
+- Hero = data: rule overrides (gravity, lock delay, preview count, garbage multiplier) and abilities triggered by engine events (clear, combo, garbage received).
+- The ability system subscribes to engine events. Rules stay in the engine and are parameterized, not forked.
 - Persistent progression and unlocks (local save first).
 
-## 4. Campaign and bosses
-- Encounter definitions: enemy AI profile + hero kit + scripted mechanics (board effects, timed garbage patterns, phase changes).
+## 3. Campaign and bosses
+- Encounter definitions: enemy AI profile + rules + starting board + scripted mechanics (timed garbage patterns, phase changes).
 - Boss mechanics expressed as engine events/modifiers so they replay deterministically.
 
-## 5. Online multiplayer
-- Shared seed + input-log lockstep or server-relayed garbage. Prerequisite: fully deterministic engine ticks (stage 1).
+## 4. Online multiplayer
+- Each client simulates its own board. Input logs and attack events are relayed, and a Node server replays them with the same `src/game` code to validate results.

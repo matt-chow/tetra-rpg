@@ -10,7 +10,7 @@ export function Menu({ onSelect }) {
   ];
   return (
     <div style={{ ...panelStyle, minWidth: 320, maxWidth: 420, textAlign: "center" }}>
-      <h1 style={{ marginTop: 0, marginBottom: 18, fontSize: 30, letterSpacing: 1 }}>Teto</h1>
+      <h1 style={{ marginTop: 0, marginBottom: 18, fontSize: 30, letterSpacing: 1 }}>Tetra RPG</h1>
       <nav style={{ display: "grid", gap: 10 }}>
         {items.map(([id, label, hint], i) => (
           <button key={id} autoFocus={i === 0} style={{ ...buttonStyle(i === 0), textAlign: "left" }} onClick={() => onSelect(id)}>
